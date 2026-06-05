@@ -614,7 +614,26 @@ class BuiltLLMAgent(LLMAgent):
         cur_cand = candidate
         while cur_cand is not None:
             if include_score_feedback and cur_cand.score is not None:
-                parents_prompt = f"The latency of this code was {cur_cand.score}.\n" + parents_prompt
+                raw_lat = getattr(cur_cand, "raw_latency", None)
+                raw_ins = getattr(cur_cand, "raw_instret", None)
+                raw_cpi = getattr(cur_cand, "raw_cpi", None)
+                if raw_lat is not None and raw_lat != cur_cand.score:
+                    # Score is a normalized metric; also report raw cycles for context
+                    fb = f"Total latency across test sizes: {raw_lat} cycles"
+                    if raw_ins is not None:
+                        fb += f", {raw_ins} instructions retired"
+                    if raw_cpi is not None:
+                        fb += f" (CPI={raw_cpi})"
+                    fb += (
+                        f". Normalized score: {cur_cand.score} (lower is better). "
+                        f"This score is the sum of per-size (cycles / workload_elements * 1000), "
+                        f"so each size contributes roughly equally regardless of absolute cycle count. "
+                        f"Optimizing the score means optimizing consistently across all benchmarked sizes, "
+                        f"not just the largest one.\n"
+                    )
+                    parents_prompt = fb + parents_prompt
+                else:
+                    parents_prompt = f"The latency of this code was {cur_cand.score}.\n" + parents_prompt
             if include_hw_feedback_flag and hasattr(cur_cand, "hw_feedback") and cur_cand.hw_feedback:
                 parents_prompt = "\n".join(cur_cand.hw_feedback) + "\n" + parents_prompt
             if not include_ancestors:

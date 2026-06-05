@@ -51,6 +51,10 @@ class CodeCandidate:
         self.code_gen_model = code_gen_model
         self.stdout = stdout
         self.stderr = stderr
+        # Raw stats populated by evaluate_candidates (for richer feedback to LLM)
+        self.raw_latency = None  # total cycles
+        self.raw_instret = None  # total retired instructions
+        self.raw_cpi = None      # cycles per instruction
 
     def __repr__(self):
         repr_str = f"CodeCandidate(parent={repr(self.parent)},\nplan="

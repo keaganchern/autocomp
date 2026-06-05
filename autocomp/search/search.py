@@ -129,6 +129,17 @@ def create_backend_and_agents(
             if code_models
             else None
         )
+    elif agent_name == "saturn":
+        agent = LLMEnsemble(
+            [SaturnLLMAgent(m, hw_config, eval_backend) for m in models]
+        )
+        code_agent = (
+            LLMEnsemble(
+                [SaturnLLMAgent(m, hw_config, eval_backend) for m in code_models]
+            )
+            if code_models
+            else None
+        )
     elif agent_name.startswith("built:") or Path(agent_name).is_dir():
         # "built:<name>" resolves to .built/<name>/; direct paths also accepted
         _BUILT_DIR = REPO_ROOT / "autocomp" / "agent_builder" / ".built"
@@ -470,7 +481,10 @@ class SearchStrategy:
         Evaluate the candidates based on the provided optimization metric
         and update their scores.
         """
-        # Load stats if they already exist in the save_dir
+        # Load stats if they already exist AND all reflect a correct run.
+        # Failed candidates (correct=False) bypass the cache so the user can
+        # iterate on broken code without manually clearing eval-results dirs.
+        cached_stats = None
         if (
             use_cache
             and save_dir is not None
@@ -480,13 +494,21 @@ class SearchStrategy:
                 for i in range(len(candidates))
             )
         ):
+            cached_stats = []
+            for i in range(len(candidates)):
+                with open(save_dir / f"code_{i}_result.txt", "r") as f:
+                    cached_stats.append(json.load(f))
+            if not all(s.get("correct") for s in cached_stats):
+                logger.info(
+                    f"Cached results in {save_dir} include failures — re-evaluating instead of replaying."
+                )
+                cached_stats = None
+
+        if cached_stats is not None:
             logger.info(
                 f"Loading cached evaluation results for all {len(candidates)} candidates from {save_dir}"
             )
-            per_cand_stats = []
-            for i in range(len(candidates)):
-                with open(save_dir / f"code_{i}_result.txt", "r") as f:
-                    per_cand_stats.append(json.load(f))
+            per_cand_stats = cached_stats
         else:
             # Skip eval backend for pre-failed candidates (score=inf set upstream).
             # Omit stderr/stdout from synthesized stats so the downstream loop
@@ -528,8 +550,23 @@ class SearchStrategy:
 
         for cand_i, stats in enumerate(per_cand_stats):
             if stats["correct"]:
-                # Assume the metric exists if the code passed tests
-                candidates[cand_i].score = stats[metric]
+                # Fall back to latency if the requested metric is missing (e.g., harness didn't print score)
+                if metric in stats:
+                    candidates[cand_i].score = stats[metric]
+                elif "latency" in stats:
+                    logger.warning(
+                        "Metric '%s' not in stats for candidate %d; falling back to 'latency' (%d)",
+                        metric, cand_i, stats["latency"],
+                    )
+                    candidates[cand_i].score = stats["latency"]
+                else:
+                    raise KeyError(
+                        f"Neither '{metric}' nor 'latency' found in stats for candidate {cand_i}: {stats}"
+                    )
+                # Populate raw stats for richer feedback (may be absent on non-xnnpack backends)
+                candidates[cand_i].raw_latency = stats.get("latency")
+                candidates[cand_i].raw_instret = stats.get("instret")
+                candidates[cand_i].raw_cpi = stats.get("cpi")
             else:
                 candidates[cand_i].score = float("inf")
             # Store stdout and stderr for failed candidates

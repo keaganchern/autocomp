@@ -1,4 +1,4 @@
-void xnn_x32_transposec_ukernel__16x8_rvv(
+void test(
   const uint32_t* input,
   uint32_t* output,
   size_t input_stride,

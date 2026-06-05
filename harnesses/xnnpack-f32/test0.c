@@ -11,7 +11,8 @@
 #include "src/xnnpack/raddstoreexpminusmax.h"
 #include "raddstoreexpminusmax-microkernel-tester.h"
 
-#define BATCH_SIZE 256
+static const size_t test_sizes[] = {3840, 32640};
+#define NUM_SIZES (sizeof(test_sizes) / sizeof(test_sizes[0]))
 
 typedef void (*candidate_fn_t)(
     size_t batch,
@@ -35,8 +36,18 @@ int main() {
         xnn_f32_raddstoreexpminusmax_ukernel_fn kernel_fn =
             (xnn_f32_raddstoreexpminusmax_ukernel_fn)test_fn;
 
-        RAddStoreExpMinusMaxMicrokernelTester tester;
-        for (size_t elems = BATCH_SIZE - 8; elems <= BATCH_SIZE + 8; elems++) {
+        for (int _w = 0; _w < 5; _w++) {
+            for (int _si = 0; _si < NUM_SIZES; _si++) {
+                RAddStoreExpMinusMaxMicrokernelTester warmup;
+                warmup.elements(test_sizes[_si]).iterations(1).Test(kernel_fn, nullptr);
+            }
+        }
+
+        unsigned long total_cycles = 0;
+        unsigned long total_instret = 0;
+        for (int _si = 0; _si < NUM_SIZES; _si++) {
+            size_t elems = test_sizes[_si];
+            RAddStoreExpMinusMaxMicrokernelTester tester;
             tester.elements(elems)
                   .iterations(1)
                   .Test(kernel_fn, nullptr);
@@ -45,12 +56,17 @@ int main() {
                 if (NUM_CANDIDATES == 1) sys_reboot(SYS_REBOOT_COLD);
                 goto next_candidate;
             }
+            printf("  size %zu: %lu cycles, %lu instrs\n", elems, tester.kernel_cycles(), tester.kernel_instret());
+            total_cycles += tester.kernel_cycles();
+            total_instret += tester.kernel_instret();
         }
 
         printf("Correct result\n");
-        printf("ID %d latency: %lu cycles\n", _cand_id, tester.kernel_cycles());
+        printf("ID %d latency: %lu cycles\n", _cand_id, total_cycles);
+        printf("ID %d instret: %lu instrs\n", _cand_id, total_instret);
         if (NUM_CANDIDATES == 1) {
-            printf("Generated implementation latency: %lu cycles\n", tester.kernel_cycles());
+            printf("Generated implementation latency: %lu cycles\n", total_cycles);
+            printf("Generated implementation instret: %lu instrs\n", total_instret);
         }
         next_candidate:;
     }

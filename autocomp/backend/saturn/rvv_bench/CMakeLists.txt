@@ -36,7 +36,15 @@ target_include_directories(app PRIVATE ${XNNPACK_DIR}/src)
 target_link_libraries(app PRIVATE XNNPACK pthreadpool)
 
 # Add source files (kernel is embedded in main.c)
-target_sources(app PRIVATE src/main.c)
+target_sources(app PRIVATE
+  src/main.c
+  src/reference.c
+  src/input.c
+  src/conv_weight.c
+  src/conv_bias.c
+  src/extra_bias.c
+  src/expected_output.c
+)
 
 # Enable RVV intrinsics
 target_compile_options(app PRIVATE -march=rv64gcv

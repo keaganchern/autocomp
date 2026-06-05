@@ -4,7 +4,12 @@ Usage:
     python -m autocomp.search.run_search
 
 Configure the parameters in the `main()` function below.
+
+The hardcoded `prob_id` can be overridden via the `AUTOCOMP_PROB_ID` env var
+— used by scripts/run_kb_pipeline.py to drive a sweep across problems without
+sed-editing this file.
 """
+import os
 import pathlib
 import random
 
@@ -30,27 +35,24 @@ def main():
     # ------------------------------------------------------------------
     # Target & environment
     # ------------------------------------------------------------------
-    backend_name = "trn"           # "gemmini", "trn", "tpu", "jaxbench", "kernelbench", "gpumode", "saturn", "xnnpack", "metal"
-    agent_name = "built:trn1-nki1"    # "gemmini", "trn", "cuda", "saturn", "built:<name>", or path
-    simulator = None                # "firesim"/"spike" for gemmini, saturn, and xnnpack; "gpumode-local"/"gpumode-cli" for gpumode
-    hw_config = TrnHardwareConfig("trn1.2xlarge")
+    backend_name = "saturn"            # "gemmini", "trn", "tpu", "jaxbench", "kernelbench", "gpumode", "saturn", "xnnpack"
+    agent_name = "built:saturn-rvv"   # "gemmini", "trn", "cuda", "saturn", "built:<name>", or path
+    simulator = "firesim"                # "firesim"/"spike" for gemmini, saturn, and xnnpack; "gpumode-local"/"gpumode-cli" for gpumode
+    hw_config = SaturnHardwareConfig()
     # hw_config = GemminiHardwareConfig(pe_dim=16, spad_size_kb=256, acc_size_kb=64)
     # hw_config = CudaHardwareConfig("NVIDIA L40S", "2.5.0", "12.4")
     # hw_config = TpuHardwareConfig("v6e-1")
     # hw_config = MetalHardwareConfig("M2", "4.0", "apple8", 8)
 
-    prob_type = "trn-tutorial-nki1"      # see README.md or sols/ for available problems
-    prob_id = 1
+    prob_type = "cgo-kernels"      # KernelBench problem extracted via scripts/extract_kb_problem.py
+    prob_id = 0 # int(os.environ.get("AUTOCOMP_PROB_ID", "33"))
 
     # ------------------------------------------------------------------
     # Models
     # ------------------------------------------------------------------
     # Format: "provider::model" (openai, anthropic, together, aws, gcp, vllm)
     models = [
-        "aws::us.anthropic.claude-opus-4-5-20251101-v1:0",
-        "aws::zai.glm-5",
-        "aws::minimax.minimax-m2.5",
-        "aws::moonshotai.kimi-k2.5",
+        "gemini-3-flash-preview", "gemini-3.1-pro-preview"
     ]
     code_models = None  # None = same as planning models
 
@@ -58,7 +60,7 @@ def main():
     # Search
     # ------------------------------------------------------------------
     search_strategy = "beam"
-    metric = "latency"
+    metric = "score"
     iterations = 8
     num_plan_candidates = 4
     num_code_candidates = 2
@@ -174,7 +176,9 @@ def main():
         output_str += "_edits"
     if skip_planning:
         output_str += "_noplan"
-    output_dir = pathlib.Path("output") / output_str
+    # Anchor output/ at the repo root so this script works regardless of CWD.
+    repo_root = pathlib.Path(__file__).resolve().parents[2]
+    output_dir = repo_root / "output" / output_str
     output_dir.mkdir(parents=True, exist_ok=True)
 
     import autocomp.common.my_logging

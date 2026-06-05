@@ -625,7 +625,7 @@ out = __riscv_vfmacc_vf_f64m2(out, filter[2], row_s2, vl);
         try:
             response = self.llm_client.chat(
                 prompt=prompt,
-                num_candidates=1,
+                num_samples=1,
                 temperature=0.0
             )[0]
             
@@ -654,7 +654,7 @@ out = __riscv_vfmacc_vf_f64m2(out, filter[2], row_s2, vl);
         try:
             responses = self.llm_client.chat_async(
                 prompts_lst=prompts,
-                num_candidates=1,
+                num_samples=1,
                 temperature=0.0
             )
             

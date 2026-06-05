@@ -13,19 +13,19 @@ from autocomp.search.prob import Prob
 from autocomp.backend.eval_backend import EvalBackend
 
 # Environment path variables
-XNNPACK_CHIPYARD_PATH = ""
-XNNPACK_ZEPHYR_BASE = ""  # Zephyr installation root
+XNNPACK_CHIPYARD_PATH = "/scratch/kchern2/chipyard"
+XNNPACK_ZEPHYR_BASE = "/scratch/kchern2/zephyr-chipyard-sw"  # Zephyr installation root
 
 # Timeouts (seconds)
 XNNPACK_SPIKE_TIMEOUT = 60.0
 XNNPACK_COMPILE_TIMEOUT = 300.0
-XNNPACK_FIRESIM_PER_CANDIDATE_TIMEOUT = 60.0
+XNNPACK_FIRESIM_PER_CANDIDATE_TIMEOUT = 120.0
 XNNPACK_FIRESIM_MIN_TIMEOUT = 45.0
 
 
 XNNPACK_TEMP_DIR = pathlib.Path(__file__).parent / "tmp_dir"
 XNNPACK_ZEPHYR_APP_PATH = pathlib.Path(__file__).parent / "rvv_bench" # Contains src/main.cpp, CMakeLists.txt, prj.conf
-XNNPACK_FIRESIM_SIM_SLOT_DIR = pathlib.Path("")
+XNNPACK_FIRESIM_SIM_SLOT_DIR = pathlib.Path("/scratch/kchern2/FIRESIM_RUNS_DIR/sim_slot_0")
 
 def clean_code(code_str: str) -> str:
     """
@@ -88,7 +88,8 @@ class XnnpackTest:
             return self._fn_signature
 
         content = self.sol_file.read_text()
-        match = re.search(r'void\s+\w+\s*\((.*?)\)\s*\{', content, re.DOTALL)
+        # Match function params, allowing macros/attributes between ) and {
+        match = re.search(r'void\s+\w+\s*\((.*?)\)\s*[^{]*\{', content, re.DOTALL)
         if not match:
             raise ValueError(f"No function definition found in {self.sol_file}")
         raw_sig = match.group(1).strip()
@@ -110,7 +111,7 @@ class XnnpackTest:
         func_defs = []
         for i, body in enumerate(code_bodies):
             func_defs.append(
-                f"__attribute__((noinline)) static void candidate_kernel_{i}({param_sig}) {{\n"
+                f"__attribute__((noinline, aligned(4096))) static void candidate_kernel_{i}({param_sig}) {{\n"
                 f"{body}\n"
                 f"}}"
             )
@@ -337,7 +338,11 @@ def run_firesim_batch(binary_path: pathlib.Path,
 
     # 5. Poll uartlog for results
     pattern = re.compile(r"ID (\d+) latency: (\d+) cycles")
+    instret_pattern = re.compile(r"ID (\d+) instret: (\d+) instrs")
+    score_pattern = re.compile(r"ID (\d+) score: (\d+)")
     results = {}
+    instret_results = {}
+    score_results = {}
     last_result_time = time.time()
     poll_interval = 1.0
     timeout = min_timeout + per_candidate_timeout * n_expected
@@ -349,8 +354,13 @@ def run_firesim_batch(binary_path: pathlib.Path,
             if proc.poll() is not None:
                 # Process finished — parse final uartlog
                 if uartlog_path.exists():
-                    for m in pattern.finditer(uartlog_path.read_text()):
+                    final_content = uartlog_path.read_text()
+                    for m in pattern.finditer(final_content):
                         results[int(m.group(1))] = int(m.group(2))
+                    for m in instret_pattern.finditer(final_content):
+                        instret_results[int(m.group(1))] = int(m.group(2))
+                    for m in score_pattern.finditer(final_content):
+                        score_results[int(m.group(1))] = int(m.group(2))
                 break
 
             # Read current uartlog
@@ -363,6 +373,10 @@ def run_firesim_batch(binary_path: pathlib.Path,
                         results[idx] = latency
                         logger.info("FireSim: candidate %d = %d cycles", idx, latency)
                         new_found = True
+                for m in instret_pattern.finditer(content):
+                    instret_results[int(m.group(1))] = int(m.group(2))
+                for m in score_pattern.finditer(content):
+                    score_results[int(m.group(1))] = int(m.group(2))
                 if new_found:
                     last_result_time = time.time()
 
@@ -386,7 +400,24 @@ def run_firesim_batch(binary_path: pathlib.Path,
             kill_cmd = f"{firesim_setup} && firesim kill"
             subprocess.run(["bash", "-c", kill_cmd],
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            proc.wait(timeout=120)
+            try:
+                proc.wait(timeout=120)
+            except subprocess.TimeoutExpired:
+                logger.warning("firesim runworkload did not exit after kill; force-killing")
+                proc.kill()
+                try:
+                    proc.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    logger.error("firesim runworkload failed to terminate even after SIGKILL")
+        # Final uartlog parse AFTER kill/wait to catch any late-flushed lines (instret, score)
+        if uartlog_path.exists():
+            final_content = uartlog_path.read_text()
+            for m in instret_pattern.finditer(final_content):
+                instret_results[int(m.group(1))] = int(m.group(2))
+            for m in score_pattern.finditer(final_content):
+                score_results[int(m.group(1))] = int(m.group(2))
+            logger.info("Final uartlog parse: %d latencies, %d instret, %d scores",
+                        len(results), len(instret_results), len(score_results))
 
     firesim_wall = time.time() - firesim_start
     if hung_candidate is not None:
@@ -395,7 +426,7 @@ def run_firesim_batch(binary_path: pathlib.Path,
     else:
         logger.info("FireSim: collected %d/%d results (%.1fs wall)", len(results), n_expected, firesim_wall)
 
-    return results, hung_candidate
+    return results, instret_results, score_results, hung_candidate
 
 
 def _identify_hung_candidate(uartlog_content: str, results: dict[int, int],
@@ -520,7 +551,7 @@ class XnnpackEvalBackend(EvalBackend):
                     logger.debug("Code %d, Test %d: Correct result", code_i, test_i)
                     stats[code_i]["test_results"][test_i] = True
 
-                    # Extract latency from spike output
+                    # Extract latency and instret from spike output
                     if simulator == "spike" and "Generated implementation latency" in test_output:
                         try:
                             latency_str = test_output.split("Generated implementation latency: ")[-1]
@@ -528,6 +559,22 @@ class XnnpackEvalBackend(EvalBackend):
                             stats[code_i]["latency"] = sol_latency
                         except (ValueError, IndexError):
                             logger.warning("Failed to parse latency from spike output for code %d", code_i)
+                        try:
+                            if "Generated implementation instret" in test_output:
+                                instret_str = test_output.split("Generated implementation instret: ")[-1]
+                                sol_instret = int(instret_str.split(" instrs")[0])
+                                stats[code_i]["instret"] = sol_instret
+                                if sol_instret > 0:
+                                    stats[code_i]["cpi"] = round(sol_latency / sol_instret, 2)
+                        except (ValueError, IndexError):
+                            pass
+                        try:
+                            if "Generated implementation score" in test_output:
+                                score_str = test_output.split("Generated implementation score: ")[-1].split("\n")[0]
+                                sol_score = int(score_str.strip())
+                                stats[code_i]["score"] = sol_score
+                        except (ValueError, IndexError):
+                            pass
                 else:
                     logger.debug("Code %d, Test %d: Incorrect result", code_i, test_i)
                     stats[code_i]["test_results"][test_i] = False
@@ -558,16 +605,26 @@ class XnnpackEvalBackend(EvalBackend):
                 else:
                     logger.info("Running %d passing candidates on FireSim...", len(passing_codes))
 
-                    firesim_latencies = self._run_firesim_batch(
+                    firesim_latencies, firesim_instret, firesim_scores = self._run_firesim_batch(
                         passing_codes, passing_indices, prob
                     )
 
-                    # Update stats with FireSim latencies
+                    # Update stats with FireSim latencies and instret
                     for orig_idx, latency in firesim_latencies.items():
                         if latency is not None:
                             stats[orig_idx]["firesim_latency"] = latency
                             stats[orig_idx]["latency"] = latency
                             logger.debug("FireSim latency for candidate %d: %d cycles", orig_idx, latency)
+                    # Score (normalized metric) — kept separate from latency so LLM still sees raw cycles
+                    for orig_idx, score in firesim_scores.items():
+                        stats[orig_idx]["score"] = score
+                        logger.debug("FireSim score for candidate %d: %d", orig_idx, score)
+                    for orig_idx, instret in firesim_instret.items():
+                        stats[orig_idx]["instret"] = instret
+                        latency = firesim_latencies.get(orig_idx)
+                        if latency and instret > 0:
+                            stats[orig_idx]["cpi"] = round(latency / instret, 2)
+                            logger.debug("FireSim candidate %d: %d instrs, CPI=%.2f", orig_idx, instret, latency / instret)
                     missing_indices = set(passing_indices) - set(firesim_latencies.keys())
                     if missing_indices:
                         msg = "FireSim did not return latency for candidate"
@@ -581,7 +638,7 @@ class XnnpackEvalBackend(EvalBackend):
     def _run_firesim_batch(self,
                            passing_codes: list[str],
                            passing_indices: list[int],
-                           prob: Prob) -> dict[int, int]:
+                           prob: Prob) -> tuple[dict[int, int], dict[int, int]]:
         """
         Run passing candidates on FireSim with uartlog polling.
 
@@ -589,6 +646,8 @@ class XnnpackEvalBackend(EvalBackend):
         kills FireSim, removes the hanging candidate, and re-runs
         the remaining untimed candidates. Repeats until all candidates
         are timed or all remaining ones hang.
+
+        Returns (latencies_dict, instret_dict, scores_dict).
         """
         sol_file = self._find_sol_file(prob)
         xnnpack_tests = [XnnpackTest(t.test_file, sol_file) for t in prob.tests]
@@ -597,6 +656,8 @@ class XnnpackEvalBackend(EvalBackend):
         first_test = xnnpack_tests[0]
 
         all_results = {}
+        all_instret = {}
+        all_scores = {}
         remaining_codes = list(passing_codes)
         remaining_indices = list(passing_indices)
         hung_indices = set()
@@ -609,7 +670,7 @@ class XnnpackEvalBackend(EvalBackend):
             if isinstance(binary_result, str):
                 raise RuntimeError(f"Failed to compile FireSim binary: {binary_result}")
 
-            results, hung_candidate = run_firesim_batch(
+            results, instret, scores, hung_candidate = run_firesim_batch(
                 binary_result, self.firesim_path,
                 n_expected=len(remaining_indices),
                 candidate_order=remaining_indices
@@ -617,6 +678,8 @@ class XnnpackEvalBackend(EvalBackend):
 
             # Collect successful results
             all_results.update(results)
+            all_instret.update(instret)
+            all_scores.update(scores)
 
             if hung_candidate is None:
                 # All candidates completed
@@ -648,7 +711,7 @@ class XnnpackEvalBackend(EvalBackend):
             if not remaining_indices:
                 logger.info("No more candidates to re-run after removing hung ones")
 
-        return all_results
+        return all_results, all_instret, all_scores
 
     def _build_firesim_combined_code(self,
                                       passing_codes: list[str],
