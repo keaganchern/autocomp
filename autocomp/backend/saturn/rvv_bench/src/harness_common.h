@@ -86,6 +86,28 @@ static int s8_bit_equal(const int8_t *got, const int8_t *ref, size_t n) {
     return 1;
 }
 
+static int u32_bit_equal(const uint32_t *got, const uint32_t *ref, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        if (got[i] != ref[i]) {
+            printf("Mismatch @i=%zu got=0x%08x (%u) expected=0x%08x (%u)\n",
+                   i, got[i], got[i], ref[i], ref[i]);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int u16_bit_equal(const uint16_t *got, const uint16_t *ref, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        if (got[i] != ref[i]) {
+            printf("Mismatch @i=%zu got=0x%04x (%u) expected=0x%04x (%u)\n",
+                   i, got[i], got[i], ref[i], ref[i]);
+            return 0;
+        }
+    }
+    return 1;
+}
+
 // Tolerant: |got - ref| <= abs_tol + rel_tol*|ref|.
 // Use when reductions may reorder (GEMM tiled differently across LMUL etc).
 static int f32_approx_equal_tol(const float *got, const float *ref, size_t n,
