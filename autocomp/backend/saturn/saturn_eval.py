@@ -114,6 +114,48 @@ struct xnn_f32_default_params { char _; };
 struct xnn_f32_minmax_params { struct { float min, max; } scalar; };
 struct xnn_u8_minmax_params  { struct { uint32_t min, max; } scalar; };
 struct xnn_s8_minmax_params  { struct { int32_t  min, max; } scalar; };
+struct xnn_qs8_rsum_params   { char _; };
+struct xnn_qs8_cvt_params    { struct { int16_t input_zero_point; int32_t multiplier; int16_t output_zero_point; } scalar; };
+struct xnn_qs8_lrelu_params  { struct { int32_t input_zero_point; int32_t positive_multiplier; int32_t negative_multiplier; int32_t output_zero_point; } scalar; };
+struct xnn_f32_lrelu_params  { struct { float slope; } scalar; };
+struct xnn_qu8_add_minmax_params {
+    struct {
+        uint8_t a_zero_point;
+        uint8_t b_zero_point;
+        int32_t bias;
+        int32_t a_multiplier;
+        int32_t b_multiplier;
+        int32_t shift;
+        int16_t output_zero_point;
+        uint8_t output_min;
+        uint8_t output_max;
+    } scalar;
+};
+union xnn_qs8_mul_minmax_params {
+    struct {
+        int8_t  a_zero_point;
+        int8_t  b_zero_point;
+        float   scale;
+        int16_t output_zero_point;
+        int8_t  output_min;
+        int8_t  output_max;
+    } scalar;
+};
+struct xnn_qs8_add_minmax_params {
+    struct {
+        int8_t a_zero_point;
+        int8_t b_zero_point;
+        int32_t bias;
+        int32_t a_multiplier;
+        int32_t b_multiplier;
+        int32_t shift;
+        int16_t output_zero_point;
+        int8_t output_min;
+        int8_t output_max;
+    } scalar;
+};
+struct xnn_qs8_f32_cvt_params { struct { int32_t zero_point; float scale; } scalar; };
+struct xnn_qu8_f32_cvt_params { struct { int32_t zero_point; float scale; } scalar; };
 
 """
 

@@ -45,7 +45,7 @@ def main():
     # hw_config = MetalHardwareConfig("M2", "4.0", "apple8", 8)
 
     prob_type = "cgo-kernels"      # KernelBench problem extracted via scripts/extract_kb_problem.py
-    prob_id = 0 # int(os.environ.get("AUTOCOMP_PROB_ID", "33"))
+    prob_id = int(os.environ.get("AUTOCOMP_PROB_ID", "0"))
 
     # ------------------------------------------------------------------
     # Models
